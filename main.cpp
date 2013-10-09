@@ -689,59 +689,34 @@ void mergeTwoFiles(FileAbstraction& file1, FileAbstraction& file2, string outFil
 void mergeAllFiles(string outFileName, size_t memLimit)
 {
 	list<MergingThreadInfo*> mthgroup;
-
-	FileAbstraction* first;
-	FileAbstraction* second;
-	FileAbstraction* third;
-	FileAbstraction* fourth;
-	size_t filesToMerge = 4;
+	const int MAX_MERGE_FILES = 4;
+	vector<FileAbstraction*> streams (MAX_MERGE_FILES, NULL);
+	size_t filesToMerge = 0;
 
 	while (true) {
-		if (!fileQueue.pop(first))	{
-			mthgroup.front()->join();
-			mthgroup.pop_front();
-			fileQueue.pop(first);
-		}
-
-		if (!fileQueue.pop(second))	{
-			if (mthgroup.size() > 0) {
-				mthgroup.front()->join();
-				mthgroup.pop_front();
-				fileQueue.pop(second);
-				filesToMerge = 2;
-			}
-			else {
-				remove(outFileName.c_str());
-				rename(first->getFileName().c_str(), outFileName.c_str());
-				break;
-			}
-		}
-	
-		if (!fileQueue.pop(third)) {
-			if (mthgroup.size() > 0) {
-				mthgroup.front()->join();
-				mthgroup.pop_front();
-				fileQueue.pop(third);
-				filesToMerge = 3;
-			}
-		}
-
-		if (filesToMerge > 2) {
-			filesToMerge = 4;
-			if(!fileQueue.pop(fourth)){
+		for (int i = 0; i < MAX_MERGE_FILES; i++){
+			filesToMerge = i + 1;
+			if (!fileQueue.pop(streams[i])) {
+				filesToMerge--;
 				if (mthgroup.size() > 0) {
 					mthgroup.front()->join();
 					mthgroup.pop_front();
-					fileQueue.pop(fourth);
-					filesToMerge = 4;
+					fileQueue.pop(streams[i]);
+					filesToMerge++;
 				}
 				else
-					filesToMerge = 3;
+					break;
 			}
+
 		}
-		
+		if (filesToMerge == 1){
+			remove(outFileName.c_str());
+			rename(streams[0]->getFileName().c_str(), outFileName.c_str());
+			break;
+		}
+
 		// Make sure not more than MAX_MERGING_THREADS are running at a time
-		// Join the oldest thread before starting a new one
+		// Wait while the oldest thread is finished before starting a new one
 		if (mthgroup.size() >= MAX_MERGING_THREADS)
 		{
 			mthgroup.front()->join();
@@ -752,26 +727,25 @@ void mergeAllFiles(string outFileName, size_t memLimit)
 		MergingThreadInfo *mt = new MergingThreadInfo(mergedFileName);
 
 		if (filesToMerge == 4) {
-			TRACE ("Start thread to merge 4 files: " + first->getFileName() + ", "
-				                                       + second->getFileName() + ", "
-													   + third->getFileName() + ", "
-													   + fourth->getFileName());
-			mt->startMerge4(first, second, third, fourth, memLimit / MAX_MERGING_THREADS);
+			TRACE ("Start thread to merge 4 files: " + streams[0]->getFileName() + ", "
+				                                       + streams[1]->getFileName() + ", "
+													   + streams[2]->getFileName() + ", "
+													   + streams[3]->getFileName());
+			mt->startMerge4(streams[0], streams[1], streams[2], streams[3], memLimit / MAX_MERGING_THREADS);
 		}
 		else if (filesToMerge == 3) {
-			TRACE ("Start thread to merge 3 files: " + first->getFileName() + ", "
-				                                       + second->getFileName() + ", "
-													   + third->getFileName());
-			mt->startMerge3(first, second, third, memLimit / MAX_MERGING_THREADS);
+			TRACE ("Start thread to merge 3 files: " + streams[0]->getFileName() + ", "
+				                                       + streams[1]->getFileName() + ", "
+													   + streams[2]->getFileName());
+			mt->startMerge3(streams[0], streams[1], streams[2], memLimit / MAX_MERGING_THREADS);
 		}
 		else {
-			TRACE ("Start thread to merge 3 files: " + first->getFileName() + ", " + second->getFileName());
-			mt->startMerge2(first, second, memLimit / MAX_MERGING_THREADS);
+			TRACE ("Start thread to merge 3 files: " + streams[0]->getFileName() + ", " + streams[1]->getFileName());
+			mt->startMerge2(streams[0], streams[1], memLimit / MAX_MERGING_THREADS);
 		}
 		mthgroup.push_back(mt);
 	}
 }
-
 void sortingThread(vector<int>* v, string outFileName)
 {
 	std::sort(v->begin(), v->end());
