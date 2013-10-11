@@ -1,21 +1,22 @@
 #include <boost/lockfree/queue.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/thread.hpp>
-#include <iostream>
+//#include <iostream>
 #include <fstream>
 #include <vector>
 #include <algorithm>
 #include <string>
-#include <stdlib.h>
+#include <sstream>
 
 #define TRACE(msg) std::cout << (msg) << endl;
 
 using namespace std;
 
-const string TMP_FILE_PREFIX = "__tmp.tmp";
-const int MAX_SORTING_THREADS = 4;
-const int MAX_MERGING_THREADS = 4;
-#define MAX_FILES 200
+const string TMP_FILE_PREFIX = "__tmp";
+const string TMP_FILE_SUFFIX = ".tmp";
+const size_t MAX_SORTING_THREADS = 4;
+const size_t MAX_MERGING_THREADS = 4;
+const size_t MAX_FILES = 200;
 
 // Shares of memory used by input streams and output stream when merging multiple files (in %)
 const int IN_FILES_SHARE = 50;
@@ -27,11 +28,15 @@ int getNextFileIndex() {
 	return fileIndex++;
 }
 
+string int2string(int i){
+	ostringstream s;
+	s << i;
+	return s.str();
+}
+
 // Generate name for a next temporary file
 string getTmpFileName() {
-	char buff[10];
-	_itoa_s(getNextFileIndex(), buff, 10, 10);
-	return TMP_FILE_PREFIX + string(buff);
+	return TMP_FILE_PREFIX + int2string(getNextFileIndex()) + TMP_FILE_SUFFIX;
 }
 
 // Align block size so that it is divisible by 4
@@ -47,11 +52,11 @@ public:
 	FileAbstraction(string aFileName) :
 	  fileName(aFileName),
       fileSize(0),
-	  memoryLimit(0),
+	  bytesRead(0),
 	  curSubBlock(NULL),
+	  memoryLimit(0),
 	  curSubBlockSize(0),
-	  curSubBlockPos(0),
-	  bytesRead(0)
+	  curSubBlockPos(0)
 	{}
 
 	~FileAbstraction()	{
@@ -67,7 +72,7 @@ public:
 			return;
 		}
 		fd.seekg (0, fd.end);
-		fileSize = (int)fd.tellg();
+		fileSize = (size_t)fd.tellg();
 		fd.seekg (0, fd.beg);
 		curSubBlock = new int[memoryLimit / sizeof(int)];
 		readNextPortion();
@@ -176,11 +181,11 @@ class InputFile : public FileWrapper<ifstream>{
 public:
 	InputFile(string fileName) : FileWrapper(fileName) {
 		name = fileName;
-		f.open(fileName, std::ios::in | std::ios::binary);
+		f.open(fileName.c_str(), std::ios::in | std::ios::binary);
 		if (!f) throw string("Could not find the file");
 	}
 
-	int length() {
+	size_t length() {
 		f.seekg (0, f.end);
 		int inFileLength = (int)f.tellg();
 		f.seekg (0, f.beg);
@@ -196,7 +201,7 @@ class OutputFile : public FileWrapper<ofstream>{
 public:
 	OutputFile(string fileName) : FileWrapper(fileName) {
 		name = fileName;
-		f.open(fileName, std::ios::out | std::ios::binary);
+		f.open(fileName.c_str(), std::ios::out | std::ios::binary);
 		if (!f) throw string("Could not find the file");
 	}
 
@@ -270,7 +275,6 @@ private:
 	int* data;                // Data portion to be written
 	OutputFile *outFile;      // File to write the portion to
 	bool lastPortion;         // indicates whether the file should be closed after write is done
-	
 };
 
 boost::lockfree::queue<FileAbstraction*> fileQueue(MAX_FILES);
@@ -288,7 +292,7 @@ public:
 		t = boost::thread(sortingThread, boost::ref(data), outFileName);
 	}
 
-	void alloc(int size) {		
+	void alloc(size_t size) {		
 		data = new vector<int>(size, 0);
 	}
 
@@ -311,15 +315,15 @@ public:
 	MergingThreadInfo(string fName) : fileName(fName) {}
 	~MergingThreadInfo() {}
 	
-	void startMerge2(FileAbstraction *first, FileAbstraction* second, int memLimit) {
+	void startMerge2(FileAbstraction *first, FileAbstraction* second, size_t memLimit) {
 		t = boost::thread(mergeTwoFiles, boost::ref(*first), boost::ref(*second), fileName, memLimit);
 	}
 
-	void startMerge3(FileAbstraction *f1, FileAbstraction* f2, FileAbstraction* f3, int memLimit) {
+	void startMerge3(FileAbstraction *f1, FileAbstraction* f2, FileAbstraction* f3, size_t memLimit) {
 		t = boost::thread(mergeThreeFiles, boost::ref(*f1), boost::ref(*f2), boost::ref(*f3), fileName, memLimit);
 	}
 
-	void startMerge4(FileAbstraction *f1, FileAbstraction* f2, FileAbstraction* f3, FileAbstraction* f4, int memLimit) {
+	void startMerge4(FileAbstraction *f1, FileAbstraction* f2, FileAbstraction* f3, FileAbstraction* f4, size_t memLimit) {
 		t = boost::thread(mergeFourFiles, boost::ref(*f1), boost::ref(*f2), boost::ref(*f3), boost::ref(*f4), fileName, memLimit);
 	}
 
@@ -340,7 +344,7 @@ void mergeFourFiles(FileAbstraction& file1,
 					  string outFileName, 
 					  size_t memLimit)
 {
-	const int NUM_FILES = 4;
+	const size_t NUM_FILES = 4;
 	size_t portion = divisibleBy4( (memLimit * OUT_FILE_SHARE / 100) / sizeof(int));
 	size_t counter = 0;
 	size_t fileSize = 0;	
@@ -350,7 +354,7 @@ void mergeFourFiles(FileAbstraction& file1,
 	
 	int* collector = job->getData();
 
-	int inFileMemoryLimit = (memLimit * IN_FILES_SHARE / 100) / NUM_FILES;
+	size_t inFileMemoryLimit = (memLimit * IN_FILES_SHARE / 100) / NUM_FILES;
 
 	file1.setMemoryLimit(inFileMemoryLimit);
 	file2.setMemoryLimit(inFileMemoryLimit);
@@ -482,7 +486,7 @@ void mergeFourFiles(FileAbstraction& file1,
 		else if (!file4.isExhausted())
 			collector[counter++] = file4.getCurElementAndAdvance();
 
-		else // both files are exhausted
+		else // all four files are exhausted
 			isLast = true;
 
 		// Check if it's time to write the portion to file
@@ -526,7 +530,7 @@ void mergeThreeFiles(FileAbstraction& file1,
 					  string outFileName, 
 					  size_t memLimit)
 {
-	const int NUM_FILES = 3;
+	const size_t NUM_FILES = 3;
 	size_t portion = divisibleBy4( (memLimit * OUT_FILE_SHARE / 100) / sizeof(int));
 	size_t counter = 0;
 	size_t fileSize = 0;	
@@ -536,7 +540,7 @@ void mergeThreeFiles(FileAbstraction& file1,
 	
 	int* collector = job->getData();
 
-	int inFileMemoryLimit = (memLimit * IN_FILES_SHARE / 100) / NUM_FILES;
+	size_t inFileMemoryLimit = (memLimit * IN_FILES_SHARE / 100) / NUM_FILES;
 
 	file1.setMemoryLimit(inFileMemoryLimit);
 	file2.setMemoryLimit(inFileMemoryLimit);
@@ -583,7 +587,7 @@ void mergeThreeFiles(FileAbstraction& file1,
 		else if (!file3.isExhausted())
 			collector[counter++] = file3.getCurElementAndAdvance();
 
-		else // both files are exhausted
+		else // all three files are exhausted
 			isLast = true;
 
 		// Check if it's time to write the portion to file
@@ -629,7 +633,7 @@ void mergeTwoFiles(FileAbstraction& file1, FileAbstraction& file2, string outFil
 	WriteJob *job = new WriteJob(portion, outFile);
 	int* collector = job->getData();
 
-	int inFileMemoryLimit = (memLimit * IN_FILES_SHARE / 100) / NUM_FILES;
+	size_t inFileMemoryLimit = (memLimit * IN_FILES_SHARE / 100) / NUM_FILES;
 
 	file1.setMemoryLimit(inFileMemoryLimit);
 	file2.setMemoryLimit(inFileMemoryLimit);
@@ -689,12 +693,12 @@ void mergeTwoFiles(FileAbstraction& file1, FileAbstraction& file2, string outFil
 void mergeAllFiles(string outFileName, size_t memLimit)
 {
 	list<MergingThreadInfo*> mthgroup;
-	const int MAX_MERGE_FILES = 4;
+	const size_t MAX_MERGE_FILES = 4;
 	vector<FileAbstraction*> streams (MAX_MERGE_FILES, NULL);
 	size_t filesToMerge = 0;
 
-	while (true) {
-		for (int i = 0; i < MAX_MERGE_FILES; i++){
+	for(;;) {
+		for (size_t i = 0; i < MAX_MERGE_FILES; i++){
 			filesToMerge = i + 1;
 			if (!fileQueue.pop(streams[i])) {
 				filesToMerge--;
@@ -746,6 +750,7 @@ void mergeAllFiles(string outFileName, size_t memLimit)
 		mthgroup.push_back(mt);
 	}
 }
+
 void sortingThread(vector<int>* v, string outFileName)
 {
 	std::sort(v->begin(), v->end());
@@ -784,15 +789,15 @@ int externalSort(const string& inFileName, const string& outFileName, size_t mem
 		{
 			TRACE("Start external sorting");
 			TRACE("Reading input file into temporary files and sorting them...");
-			int numFiles = inFileLength / threadMemLimit + (inFileLength % threadMemLimit == 0 ? 0 : 1);
+			unsigned int numFiles = inFileLength / threadMemLimit + (inFileLength % threadMemLimit == 0 ? 0 : 1);
 
 			SortingThreadInfo* thgroup = new SortingThreadInfo[numFiles];
 
-			for (int block = 0; block < numFiles; ++block)
+			for (unsigned int block = 0; block < numFiles; ++block)
 			{
 				string tmpFileName(getTmpFileName());
 
-				int blockSize = 0;
+				size_t blockSize = 0;
 				if (block < numFiles - 1 || inFileLength % threadMemLimit == 0)
 					blockSize = threadMemLimit;
 				else // the last block
@@ -817,7 +822,7 @@ int externalSort(const string& inFileName, const string& outFileName, size_t mem
 			}
 
 			if (numFiles > MAX_SORTING_THREADS - 1)
-				for (int thInd = numFiles - MAX_SORTING_THREADS + 1; thInd < numFiles; thInd++)
+				for (unsigned int thInd = numFiles - MAX_SORTING_THREADS + 1; thInd < numFiles; thInd++)
 					thgroup[thInd].join();
 
 			delete[] thgroup;
@@ -892,12 +897,12 @@ int main(int argc, char* argv[])
 
 		boost::posix_time::ptime start = boost::posix_time::microsec_clock::local_time();
 		
-		externalSort(inFileName, outFileName, memLimit);
+		externalSort(inFileName, outFileName, (size_t)memLimit);
 		
 		boost::posix_time::ptime end = boost::posix_time::microsec_clock::local_time();
 		boost::posix_time::time_duration td = end - start;
 		
-		std::cout << "Sorted in " << td.total_milliseconds() / 1000.0 << " seconds" << std::endl;
+		cout << "Sorted in " << td.total_milliseconds() / 1000.0 << " seconds" << endl;
 
 		// Check if the output file is really sorted
 		if (false == checkSorted(outFileName, inFileName))
