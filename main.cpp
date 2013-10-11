@@ -1,7 +1,6 @@
 #include <boost/lockfree/queue.hpp>
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/thread.hpp>
-//#include <iostream>
 #include <fstream>
 #include <vector>
 #include <algorithm>
@@ -743,8 +742,8 @@ void mergeAllFiles(string outFileName, size_t memLimit)
 													   + streams[2]->getFileName());
 			mt->startMerge3(streams[0], streams[1], streams[2], memLimit / MAX_MERGING_THREADS);
 		}
-		else {
-			TRACE ("Start thread to merge 3 files: " + streams[0]->getFileName() + ", " + streams[1]->getFileName());
+		else { // Merge 2 files
+			TRACE ("Start thread to merge 2 files: " + streams[0]->getFileName() + ", " + streams[1]->getFileName());
 			mt->startMerge2(streams[0], streams[1], memLimit / MAX_MERGING_THREADS);
 		}
 		mthgroup.push_back(mt);
